@@ -148,19 +148,36 @@ type Entry struct {
 
 	// Fields maintained internally.
 	hlen int // Length of the header.
+	gtThanThreshold bool
 }
 
 func (e *Entry) isZero() bool {
 	return len(e.Key) == 0
 }
 
-func (e *Entry) estimateSize(threshold int64) int64 {
+func (e *Entry) checkAndEvaluateEntrySize(threshold int64) int64 {
 	k := int64(len(e.Key))
 	v := int64(len(e.Value))
 	if v < threshold {
+		e.gtThanThreshold = false
 		return k + v + 2 // Meta, UserMeta
 	}
+
+	e.gtThanThreshold = true
 	return k + 12 + 2 // 12 for ValuePointer, 2 for metas.
+}
+
+func (e *Entry) estimateSize() int64 {
+	k := int64(len(e.Key))
+	v := int64(len(e.Value))
+	if e.gtThanThreshold {
+		return k + 12 + 2 // 12 for ValuePointer, 2 for metas.
+	}
+	return k + v + 2 // Meta, UserMeta
+}
+
+func (e *Entry) skipVlog() bool {
+	return !e.gtThanThreshold
 }
 
 func (e Entry) print(prefix string) {

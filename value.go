@@ -184,7 +184,6 @@ func (vlog *valueLog) rewrite(f *logFile) error {
 
 	vlog.opt.Infof("Rewriting fid: %d", f.fid)
 	wb := make([]*Entry, 0, 1000)
-	valThreshold := vlog.db.valueThreshold()
 	var size int64
 
 	y.AssertTrue(vlog.db != nil)
@@ -234,7 +233,7 @@ func (vlog *valueLog) rewrite(f *logFile) error {
 			ne.ExpiresAt = e.ExpiresAt
 			ne.Key = append([]byte{}, e.Key...)
 			ne.Value = append([]byte{}, e.Value...)
-			es := ne.estimateSize(valThreshold)
+			es := ne.checkAndEvaluateEntrySize(vlog.db.valueThreshold())
 			// Consider size of value as well while considering the total size
 			// of the batch. There have been reports of high memory usage in
 			// rewrite because we don't consider the value size. See #1292.
@@ -243,7 +242,7 @@ func (vlog *valueLog) rewrite(f *logFile) error {
 			// Ensure length and size of wb is within transaction limits.
 			if int64(len(wb)+1) >= vlog.opt.maxBatchCount ||
 				size+es >= vlog.opt.maxBatchSize {
-				if err := vlog.db.batchSet(wb, valThreshold); err != nil {
+				if err := vlog.db.batchSet(wb); err != nil {
 					return err
 				}
 				size = 0
@@ -325,7 +324,7 @@ func (vlog *valueLog) rewrite(f *logFile) error {
 		if end > len(wb) {
 			end = len(wb)
 		}
-		if err := vlog.db.batchSet(wb[i:end], valThreshold); err != nil {
+		if err := vlog.db.batchSet(wb[i:end]); err != nil {
 			if err == ErrTxnTooBig {
 				// Decrease the batch size to half.
 				batchSize = batchSize / 2
@@ -465,10 +464,6 @@ type valueLog struct {
 
 func vlogFilePath(dirPath string, fid uint32) string {
 	return fmt.Sprintf("%s%s%06d.vlog", dirPath, string(os.PathSeparator), fid)
-}
-
-func (vlog *valueLog) skipVlog(e *Entry, threshold int64) bool {
-	return int64(len(e.Value)) < threshold
 }
 
 func (vlog *valueLog) fpath(fid uint32) string {
@@ -675,8 +670,6 @@ type request struct {
 	Wg   sync.WaitGroup
 	Err  error
 	ref  int32
-
-	valueThreshold int64
 }
 
 func (req *request) reset() {
@@ -856,7 +849,7 @@ func (vlog *valueLog) write(reqs []*request) error {
 			buf.Reset()
 
 			e := b.Entries[j]
-			if vlog.skipVlog(e, b.valueThreshold) {
+			if e.skipVlog() {
 				b.Ptrs = append(b.Ptrs, valuePointer{})
 				continue
 			}

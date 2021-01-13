@@ -265,7 +265,6 @@ type Txn struct {
 	discarded      bool
 	doneRead       bool
 	update         bool // update is used to conditionally keep track of reads.
-	valueThreshold int64
 }
 
 type pendingWritesIterator struct {
@@ -346,7 +345,7 @@ func (txn *Txn) newPendingWritesIterator(reversed bool) *pendingWritesIterator {
 func (txn *Txn) checkSize(e *Entry) error {
 	count := txn.count + 1
 	// Extra bytes for the version in key.
-	size := txn.size + e.estimateSize(txn.valueThreshold) + 10
+	size := txn.size + e.checkAndEvaluateEntrySize(txn.db.valueThreshold()) + 10
 	if count >= txn.db.opt.maxBatchCount || size >= txn.db.opt.maxBatchSize {
 		return ErrTxnTooBig
 	}
@@ -378,8 +377,8 @@ func (txn *Txn) modify(e *Entry) error {
 		return exceedsSize("Key", maxKeySize, e.Key)
 	case int64(len(e.Value)) > txn.db.opt.ValueLogFileSize:
 		return exceedsSize("Value", txn.db.opt.ValueLogFileSize, e.Value)
-	case txn.db.opt.InMemory && int64(len(e.Value)) > txn.valueThreshold:
-		return exceedsSize("Value", txn.valueThreshold, e.Value)
+	case txn.db.opt.InMemory && int64(len(e.Value)) > txn.db.valueThreshold():
+		return exceedsSize("Value", txn.db.valueThreshold(), e.Value)
 	}
 
 	if err := txn.checkSize(e); err != nil {
@@ -595,7 +594,7 @@ func (txn *Txn) commitAndSend() (func() error, error) {
 		entries = append(entries, e)
 	}
 
-	req, err := txn.db.sendToWriteChWithThreshold(entries, txn.valueThreshold)
+	req, err := txn.db.sendToWriteCh(entries)
 	if err != nil {
 		orc.doneCommit(commitTs)
 		return nil, err
@@ -770,7 +769,6 @@ func (db *DB) newTransaction(update, isManaged bool) *Txn {
 		db:             db,
 		count:          1,                       // One extra entry for BitFin.
 		size:           int64(len(txnKey) + 10), // Some buffer for the extra entry.
-		valueThreshold: db.valueThreshold(),
 	}
 	if update {
 		if db.opt.DetectConflicts {

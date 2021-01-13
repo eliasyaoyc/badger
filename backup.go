@@ -165,7 +165,6 @@ type KVLoader struct {
 	entries        []*Entry
 	entriesSize    int64
 	totalSize      int64
-	valueThreshold int64
 }
 
 // NewKVLoader returns a new instance of KVLoader.
@@ -174,7 +173,6 @@ func (db *DB) NewKVLoader(maxPendingWrites int) *KVLoader {
 		db:             db,
 		throttle:       y.NewThrottle(maxPendingWrites),
 		entries:        make([]*Entry, 0, db.opt.maxBatchCount),
-		valueThreshold: db.valueThreshold(),
 	}
 }
 
@@ -194,7 +192,7 @@ func (l *KVLoader) Set(kv *pb.KV) error {
 		ExpiresAt: kv.ExpiresAt,
 		meta:      meta,
 	}
-	estimatedSize := e.estimateSize(l.valueThreshold)
+	estimatedSize := e.checkAndEvaluateEntrySize(l.db.valueThreshold())
 	// Flush entries if inserting the next entry would overflow the transactional limits.
 	if int64(len(l.entries))+1 >= l.db.opt.maxBatchCount ||
 		l.entriesSize+estimatedSize >= l.db.opt.maxBatchSize ||
@@ -213,7 +211,7 @@ func (l *KVLoader) send() error {
 	if err := l.throttle.Do(); err != nil {
 		return err
 	}
-	if err := l.db.batchSetAsync(l.entries, l.valueThreshold, func(err error) {
+	if err := l.db.batchSetAsync(l.entries, func(err error) {
 		l.throttle.Done(err)
 	}); err != nil {
 		return err
@@ -222,7 +220,6 @@ func (l *KVLoader) send() error {
 	l.entries = make([]*Entry, 0, l.db.opt.maxBatchCount)
 	l.entriesSize = 0
 	l.totalSize = 0
-	l.valueThreshold = l.db.valueThreshold()
 	return nil
 }
 
